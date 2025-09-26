@@ -1,16 +1,29 @@
+# Core FastAPI and server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# Authentication and security
 passlib[bcrypt]==1.7.4
-bcrypt==4.1.0
-fastapi
-uvicorn[standard]
-python-multipart
-aiohttp
-cloudinary
-supabase
-passlib
-python-jose
-bcrypt
-python-dotenv
-redis
-aioredis
-torch
-sentence-transformers
+bcrypt==4.0.1
+python-jose[cryptography]==3.3.0
+
+# Database and storage
+supabase==1.0.4
+
+# Caching
+redis==5.0.1
+aioredis==2.0.1
+
+# HTTP client
+aiohttp==3.9.1
+
+# Cloud storage
+cloudinary==1.36.0
+
+# Environment variables
+python-dotenv==1.0.0
+
+# AI/ML (if needed)
+torch==2.1.0
+sentence-transformers==2.2.2
