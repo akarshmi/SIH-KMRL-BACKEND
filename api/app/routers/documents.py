@@ -227,7 +227,10 @@ async def receive_file(
             resource_type=resource_type,
             use_filename=True,
             unique_filename=True,  # Ensure unique filename
-            folder="documents",  # Organize in folder
+            folder="documents", 
+                access_mode="public",  # Make it publicly accessible
+
+              # Organize in folder
             # Add file type transformation for better handling
             format=file_extension[1:] if file_extension and len(file_extension) > 1 else None
         )
