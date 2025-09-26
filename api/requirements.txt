@@ -1,0 +1,16 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+sentence-transformers
+fastapi
+uvicorn[standard]
+python-multipart
+aiohttp
+cloudinary
+supabase
+passlib
+python-jose
+bcrypt
+pydantic
+python-dotenv
+redis 
+aioredis
