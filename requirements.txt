@@ -1,6 +1,5 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-sentence-transformers
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.0
 fastapi
 uvicorn[standard]
 python-multipart
@@ -10,9 +9,8 @@ supabase
 passlib
 python-jose
 bcrypt
-pydantic
 python-dotenv
-redis 
+redis
 aioredis
-passlib[bcrypt]==1.7.4
-bcrypt==4.1.0
+torch
+sentence-transformers
