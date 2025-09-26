@@ -8,6 +8,12 @@ from api.app.schemas.models import URLRequest, SUMMARYRequest, ListDocsRequest, 
 # from nlpPipelne.stages.EmbedIndex import search
 import json
 from fastapi import Request
+import logging
+import traceback
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Optional ML imports
 try:
@@ -26,76 +32,100 @@ router = APIRouter()
 
 UPLOAD_DIR = "./temp"
 
+# Ensure upload directory exists
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 @router.post("/url")
 async def receive_url(request: URLRequest):
-    file_url = request.url
-    filename = file_url.split("/")[-1]
-    file_location = os.path.join(UPLOAD_DIR, filename)
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(file_url) as resp:
-            if resp.status != 200:
-                raise HTTPException(status_code=400, detail="Download failed")
-            content = await resp.read()
-            with open(file_location, "wb") as f:
-                f.write(content)
-
+    logger.info(f"Received URL request: {request.url}")
+    
     try:
-        # Upload to Cloudinary with proper configuration
-        upload_result = cloudinary.uploader.upload(
-            content, 
-            resource_type="auto",
-            use_filename=True,
-            unique_filename=False
-        )
+        file_url = request.url
+        filename = file_url.split("/")[-1]
+        file_location = os.path.join(UPLOAD_DIR, filename)
         
-        # Get the correct URL field
-        cloudinary_url = upload_result.get("secure_url") or upload_result.get("url")
-        if not cloudinary_url:
-            raise HTTPException(status_code=500, detail="Failed to get Cloudinary URL")
+        logger.info(f"Downloading file to: {file_location}")
 
-        dept_resp = supabase.table("departments").select("dept_id").eq("name", request.dept_name).execute()
-        if not dept_resp.data:
-            raise HTTPException(status_code=400, detail="Department not found")
-        dept_id = dept_resp.data[0]["dept_id"]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(file_url) as resp:
+                if resp.status != 200:
+                    logger.error(f"Download failed with status: {resp.status}")
+                    raise HTTPException(status_code=400, detail="Download failed")
+                content = await resp.read()
+                with open(file_location, "wb") as f:
+                    f.write(content)
 
-        doc_resp = supabase.table("documents").insert({
-            "title": filename,
-            "department": dept_id,
-            "url": cloudinary_url,
-            "medium": "url",
-            "priority": request.priority,
-        }).execute()
+        try:
+            logger.info("Uploading to Cloudinary...")
+            # Upload to Cloudinary with proper configuration
+            upload_result = cloudinary.uploader.upload(
+                content, 
+                resource_type="auto",
+                use_filename=True,
+                unique_filename=False
+            )
+            
+            logger.info(f"Cloudinary response: {upload_result}")
+            
+            # Get the correct URL field
+            cloudinary_url = upload_result.get("secure_url") or upload_result.get("url")
+            if not cloudinary_url:
+                logger.error("No URL in Cloudinary response")
+                raise HTTPException(status_code=500, detail="Failed to get Cloudinary URL")
+
+            logger.info("Fetching department...")
+            dept_resp = supabase.table("departments").select("dept_id").eq("name", request.dept_name).execute()
+            if not dept_resp.data:
+                logger.error(f"Department not found: {request.dept_name}")
+                raise HTTPException(status_code=400, detail="Department not found")
+            dept_id = dept_resp.data[0]["dept_id"]
+
+            logger.info("Inserting document...")
+            doc_resp = supabase.table("documents").insert({
+                "title": filename,
+                "department": dept_id,
+                "url": cloudinary_url,
+                "medium": "url",
+                "priority": request.priority,
+            }).execute()
+            
+            inserted_doc = doc_resp.data[0] if doc_resp.data else None
+
+            if inserted_doc:
+                doc_id = inserted_doc["doc_id"]
+                logger.info(f"Document inserted with ID: {doc_id}")
+                
+                # Insert summary
+                supabase.table("summaries").insert({
+                    "doc_id": doc_id,
+                    "content": ""
+                }).execute()
+                
+                # Insert transaction
+                supabase.table("transexions").insert({
+                    "from_user": request.user_id,
+                    "to_department": dept_id,
+                    "doc_id": doc_id
+                }).execute()
+
+        finally:
+            # Clean up temporary file
+            if os.path.exists(file_location):
+                os.remove(file_location)
+
+        return {
+            "document": doc_resp.data,
+            "filename": filename,
+            "processed": "",
+            "cloudinary_url": cloudinary_url
+        }
         
-        inserted_doc = doc_resp.data[0] if doc_resp.data else None
-
-        if inserted_doc:
-            doc_id = inserted_doc["doc_id"]
-            # supabase.table("summaries").insert({
-            #     "doc_id": doc_id,
-            #     "content": output["doc_summary"]
-            # }).execute()
-            supabase.table("summaries").insert({
-                "doc_id": doc_id,
-                "content": ""
-            }).execute()
-            supabase.table("transexions").insert({
-                "from_user": request.user_id,
-                "to_department": dept_id,
-                "doc_id": doc_id
-            }).execute()
-
-    finally:
-        # Clean up temporary file
-        if os.path.exists(file_location):
-            os.remove(file_location)
-
-    return {
-        "document": doc_resp.data,
-        "filename": filename,
-        "processed": "",
-        "cloudinary_url": cloudinary_url
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in receive_url: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.post("/file")
 async def receive_file(
@@ -104,31 +134,61 @@ async def receive_file(
     dept_name: str = Form(...),
     priority: str = Form(...)
 ):
-    file_location = os.path.join(UPLOAD_DIR, filename)
-    content = await file.read()
-    with open(file_location, "wb") as f:
-        f.write(content)
-
+    logger.info(f"Received file upload: {file.filename}")
+    logger.info(f"User ID: {user_id}, Dept: {dept_name}, Priority: {priority}")
+    
+    file_location = None
+    
     try:
-        # Upload to Cloudinary with proper configuration
+        # Validate inputs
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID required")
+        if not dept_name:
+            raise HTTPException(status_code=400, detail="Department name required")
+        if not priority:
+            raise HTTPException(status_code=400, detail="Priority required")
+            
+        file_location = os.path.join(UPLOAD_DIR, file.filename)
+        logger.info(f"Saving file to: {file_location}")
+        
+        # Read and save file
+        content = await file.read()
+        logger.info(f"File size: {len(content)} bytes")
+        
+        with open(file_location, "wb") as f:
+            f.write(content)
+
+        logger.info("Checking department...")
+        # Check if department exists
+        dept_resp = supabase.table("departments").select("dept_id").eq("name", dept_name).execute()
+        if not dept_resp.data:
+            logger.error(f"Department not found: {dept_name}")
+            raise HTTPException(status_code=400, detail=f"Department '{dept_name}' not found")
+        dept_id = dept_resp.data[0]["dept_id"]
+        logger.info(f"Found department ID: {dept_id}")
+
+        logger.info("Uploading to Cloudinary...")
+        # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(
             content, 
             resource_type="auto",
             use_filename=True,
             unique_filename=False,
-            folder="documents"  # Optional: organize files in folders
+            folder="documents"
         )
+        
+        logger.info(f"Cloudinary upload result: {upload_result}")
         
         # Get the correct URL field
         cloudinary_url = upload_result.get("secure_url") or upload_result.get("url")
         if not cloudinary_url:
+            logger.error("No URL found in Cloudinary response")
             raise HTTPException(status_code=500, detail="Failed to get Cloudinary URL")
 
-        dept_resp = supabase.table("departments").select("dept_id").eq("name", dept_name).execute()
-        if not dept_resp.data:
-            raise HTTPException(status_code=400, detail="Department not found")
-        dept_id = dept_resp.data[0]["dept_id"]
-
+        logger.info("Inserting document record...")
+        # Insert document
         doc_resp = supabase.table("documents").insert({
             "title": file.filename,
             "department": dept_id,
@@ -137,56 +197,70 @@ async def receive_file(
             "priority": priority,
         }).execute()
         
+        logger.info(f"Document insert response: {doc_resp}")
+        
         inserted_doc = doc_resp.data[0] if doc_resp.data else None
+        if not inserted_doc:
+            raise HTTPException(status_code=500, detail="Failed to insert document")
 
-        if inserted_doc:
-            doc_id = inserted_doc["doc_id"]
-            # supabase.table("summaries").insert({
-            #     "doc_id": doc_id,
-            #     "content": output.get("doc_summary", "")
-            # }).execute()
-            supabase.table("summaries").insert({
-                "doc_id": doc_id,
-                "content": ""
-            }).execute()
-            supabase.table("transexions").insert({
-                "from_user": user_id,
-                "to_department": dept_id,
-                "doc_id": doc_id
-            }).execute()
+        doc_id = inserted_doc["doc_id"]
+        logger.info(f"Document inserted with ID: {doc_id}")
+        
+        logger.info("Inserting summary...")
+        # Insert summary
+        summary_resp = supabase.table("summaries").insert({
+            "doc_id": doc_id,
+            "content": ""
+        }).execute()
+        logger.info(f"Summary insert response: {summary_resp}")
+        
+        logger.info("Inserting transaction...")
+        # Insert transaction
+        trans_resp = supabase.table("transexions").insert({
+            "from_user": user_id,
+            "to_department": dept_id,
+            "doc_id": doc_id
+        }).execute()
+        logger.info(f"Transaction insert response: {trans_resp}")
 
+        logger.info("Upload completed successfully")
+        return {
+            "document": doc_resp.data,
+            "filename": file.filename,
+            "processed": "",
+            "cloudinary_url": cloudinary_url
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        # Clean up on error
-        if os.path.exists(file_location):
-            os.remove(file_location)
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        logger.error(f"Unexpected error in receive_file: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
     
     finally:
         # Always clean up temporary file
-        if os.path.exists(file_location):
+        if file_location and os.path.exists(file_location):
             os.remove(file_location)
-
-    return {
-        "document": doc_resp.data,
-        "filename": file.filename,
-        "processed": "",
-        "cloudinary_url": cloudinary_url
-    }
+            logger.info(f"Cleaned up temporary file: {file_location}")
 
 @router.get("/summary")
 async def summary(doc_id: str):
     try:
+        logger.info(f"Fetching summary for doc_id: {doc_id}")
         response = supabase.table("summaries").select("content") \
             .eq("doc_id", doc_id).execute()
         if response.data:
             return {"summary": response.data[0]["content"]}
         return {"error": "No summary found"}
     except Exception as e:
+        logger.error(f"Error fetching summary: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch summary: {str(e)}")
 
 @router.get("/listdocs")
 async def listdocs(request: Request, user_id: str):
     try:
+        logger.info(f"Listing docs for user: {user_id}")
         redis_conn = request.app.state.redis
         cache_key = f"user_docs:{user_id}"
 
@@ -212,16 +286,19 @@ async def listdocs(request: Request, user_id: str):
 
         return {"data": response.data, "cached": False}
     except Exception as e:
+        logger.error(f"Error listing docs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
 
 @router.get("/compliances")
 async def compliances(doc_id: str):
     try:
+        logger.info(f"Fetching compliances for doc_id: {doc_id}")
         response = supabase.table("compliance").select("*").eq("doc_id", doc_id).execute()
         if response.data:
             return {"data": response.data}
         return {"data": [], "message": "No compliances found"}
     except Exception as e:
+        logger.error(f"Error fetching compliances: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch compliances: {str(e)}")
 
 @router.get("/search", response_model=list[SearchResponse])
@@ -233,6 +310,7 @@ async def search(query: str = Query(...), top_k: int = 5):
         )
     
     try:
+        logger.info(f"Searching for: {query}")
         # Embed query
         with torch.inference_mode():
             q = model.encode([query], normalize_embeddings=True).tolist()[0]
@@ -249,66 +327,37 @@ async def search(query: str = Query(...), top_k: int = 5):
         res = supabase.rpc("exec_sql", {"query": sql}).execute()
         return res.data
     except Exception as e:
+        logger.error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
-# Additional utility endpoints
+# Test endpoint to check if the API is working
+@router.get("/health")
+async def health_check():
+    return {"status": "healthy", "message": "Document API is running"}
 
-@router.delete("/document/{doc_id}")
-async def delete_document(doc_id: str):
-    """Delete a document and its related data"""
+# Test endpoint to check database connectivity
+@router.get("/test-db")
+async def test_database():
     try:
-        # Delete summaries first (foreign key constraint)
-        supabase.table("summaries").delete().eq("doc_id", doc_id).execute()
-        
-        # Delete compliance records
-        supabase.table("compliance").delete().eq("doc_id", doc_id).execute()
-        
-        # Delete transactions
-        supabase.table("transexions").delete().eq("doc_id", doc_id).execute()
-        
-        # Delete document chunks if they exist
-        supabase.table("document_chunks").delete().eq("doc_id", doc_id).execute()
-        
-        # Finally delete the document
-        response = supabase.table("documents").delete().eq("doc_id", doc_id).execute()
-        
-        if response.data:
-            return {"message": "Document deleted successfully"}
-        else:
-            raise HTTPException(status_code=404, detail="Document not found")
+        # Test Supabase connection
+        response = supabase.table("departments").select("count").execute()
+        return {"status": "database_connected", "message": "Database connection successful"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+        logger.error(f"Database test error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
-@router.get("/document/{doc_id}")
-async def get_document(doc_id: str):
-    """Get document details by ID"""
+# Test endpoint to check Cloudinary
+@router.get("/test-cloudinary")
+async def test_cloudinary():
     try:
-        response = supabase.table("documents").select("*").eq("doc_id", doc_id).execute()
-        if response.data:
-            return {"data": response.data[0]}
-        else:
-            raise HTTPException(status_code=404, detail="Document not found")
+        # Test Cloudinary configuration
+        import cloudinary
+        config = cloudinary.config()
+        return {
+            "status": "cloudinary_configured", 
+            "cloud_name": config.cloud_name,
+            "message": "Cloudinary configuration found"
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch document: {str(e)}")
-
-@router.put("/document/{doc_id}")
-async def update_document(doc_id: str, title: str = Form(None), priority: str = Form(None)):
-    """Update document metadata"""
-    try:
-        update_data = {}
-        if title:
-            update_data["title"] = title
-        if priority:
-            update_data["priority"] = priority
-            
-        if not update_data:
-            raise HTTPException(status_code=400, detail="No update data provided")
-            
-        response = supabase.table("documents").update(update_data).eq("doc_id", doc_id).execute()
-        
-        if response.data:
-            return {"message": "Document updated successfully", "data": response.data[0]}
-        else:
-            raise HTTPException(status_code=404, detail="Document not found")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update document: {str(e)}")
+        logger.error(f"Cloudinary test error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cloudinary configuration error: {str(e)}")
