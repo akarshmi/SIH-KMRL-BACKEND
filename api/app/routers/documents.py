@@ -60,7 +60,7 @@ async def receive_url(request: URLRequest):
             # Upload file path instead of content for better handling
             upload_result = cloudinary.uploader.upload(
                 file_location,  # Use file path instead of content
-                resource_type="raw",
+                resource_type="auto",
                 use_filename=True,
                 unique_filename=True,  # Changed to True to avoid conflicts
                 folder="documents"  # Added folder for organization
@@ -224,7 +224,7 @@ async def receive_file(
         # Upload to Cloudinary using file path
         upload_result = cloudinary.uploader.upload(
             temp_file_path,
-            resource_type="raw",
+            resource_type=resource_type,
             use_filename=True,
             unique_filename=True,  # Ensure unique filename
             folder="documents", 
