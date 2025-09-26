@@ -4,12 +4,12 @@ import cloudinary.uploader
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from api.app.config import supabase
 from api.app.schemas.models import URLRequest, SUMMARYRequest, ListDocsRequest, compliancesRequest, searchRequest, SearchResponse
-# from nlpPipelne.ProcessPipeline import process_file
-# from nlpPipelne.stages.EmbedIndex import search
 import json
 from fastapi import Request
 import logging
 import traceback
+import tempfile
+from pathlib import Path
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -57,21 +57,24 @@ async def receive_url(request: URLRequest):
 
         try:
             logger.info("Uploading to Cloudinary...")
-            # Upload to Cloudinary with proper configuration
+            # Upload file path instead of content for better handling
             upload_result = cloudinary.uploader.upload(
-                content, 
+                file_location,  # Use file path instead of content
                 resource_type="auto",
                 use_filename=True,
-                unique_filename=False
+                unique_filename=True,  # Changed to True to avoid conflicts
+                folder="documents"  # Added folder for organization
             )
             
             logger.info(f"Cloudinary response: {upload_result}")
             
-            # Get the correct URL field
-            cloudinary_url = upload_result.get("secure_url") or upload_result.get("url")
+            # Get the secure URL (always prefer secure_url)
+            cloudinary_url = upload_result.get("secure_url")
             if not cloudinary_url:
-                logger.error("No URL in Cloudinary response")
+                logger.error("No secure_url in Cloudinary response")
                 raise HTTPException(status_code=500, detail="Failed to get Cloudinary URL")
+
+            logger.info(f"Cloudinary URL generated: {cloudinary_url}")
 
             logger.info("Fetching department...")
             dept_resp = supabase.table("departments").select("dept_id").eq("name", request.dept_name).execute()
@@ -136,8 +139,10 @@ async def receive_file(
 ):
     logger.info(f"Received file upload: {file.filename}")
     logger.info(f"User ID: {user_id}, Dept: {dept_name}, Priority: {priority}")
+    logger.info(f"File content type: {file.content_type}")
+    logger.info(f"File size: {file.size}")
     
-    file_location = None
+    temp_file_path = None
     
     try:
         # Validate inputs
@@ -149,15 +154,51 @@ async def receive_file(
             raise HTTPException(status_code=400, detail="Department name required")
         if not priority:
             raise HTTPException(status_code=400, detail="Priority required")
+        
+        # Validate file type
+        allowed_types = [
+            "application/pdf",
+            "application/msword", 
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/bmp",
+            "image/webp",
+        ]
+        
+        # Also check file extension as backup
+        allowed_extensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        file_extension = Path(file.filename).suffix.lower()
+        
+        if file.content_type not in allowed_types and file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type: {file.content_type}. Allowed types: PDF, Word, Excel, Images"
+            )
+        
+        # Check file size (10MB limit)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if file.size and file.size > max_size:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File too large: {file.size} bytes. Maximum allowed: {max_size} bytes (10MB)"
+            )
             
-        file_location = os.path.join(UPLOAD_DIR, file.filename)
-        logger.info(f"Saving file to: {file_location}")
+        # Create temporary file with proper extension
+        suffix = file_extension if file_extension else '.tmp'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file_path = temp_file.name
+            
+        logger.info(f"Created temporary file: {temp_file_path}")
         
-        # Read and save file
+        # Read and save file content
         content = await file.read()
-        logger.info(f"File size: {len(content)} bytes")
+        logger.info(f"Read file content: {len(content)} bytes")
         
-        with open(file_location, "wb") as f:
+        with open(temp_file_path, "wb") as f:
             f.write(content)
 
         logger.info("Checking department...")
@@ -170,22 +211,47 @@ async def receive_file(
         logger.info(f"Found department ID: {dept_id}")
 
         logger.info("Uploading to Cloudinary...")
-        # Upload to Cloudinary
+        
+        # Determine resource type based on file type
+        resource_type = "auto"  # Let Cloudinary auto-detect
+        if file.content_type and file.content_type.startswith('image/'):
+            resource_type = "image"
+        elif file.content_type == "application/pdf":
+            resource_type = "image"  # PDFs are handled as images in Cloudinary
+        else:
+            resource_type = "raw"  # For documents
+        
+        # Upload to Cloudinary using file path
         upload_result = cloudinary.uploader.upload(
-            content, 
-            resource_type="auto",
+            temp_file_path,
+            resource_type=resource_type,
             use_filename=True,
-            unique_filename=False,
-            folder="documents"
+            unique_filename=True,  # Ensure unique filename
+            folder="documents",  # Organize in folder
+            # Add file type transformation for better handling
+            format=file_extension[1:] if file_extension and len(file_extension) > 1 else None
         )
         
         logger.info(f"Cloudinary upload result: {upload_result}")
         
-        # Get the correct URL field
-        cloudinary_url = upload_result.get("secure_url") or upload_result.get("url")
+        # Get the secure URL
+        cloudinary_url = upload_result.get("secure_url")
         if not cloudinary_url:
-            logger.error("No URL found in Cloudinary response")
-            raise HTTPException(status_code=500, detail="Failed to get Cloudinary URL")
+            logger.error("No secure_url found in Cloudinary response")
+            logger.error(f"Full Cloudinary response: {upload_result}")
+            raise HTTPException(status_code=500, detail="Failed to get Cloudinary secure URL")
+
+        logger.info(f"Cloudinary secure URL: {cloudinary_url}")
+        
+        # Test the URL accessibility (optional but helpful for debugging)
+        try:
+            import requests
+            test_response = requests.head(cloudinary_url, timeout=5)
+            logger.info(f"URL accessibility test: {test_response.status_code}")
+            if test_response.status_code != 200:
+                logger.warning(f"Cloudinary URL may not be accessible: {test_response.status_code}")
+        except Exception as test_error:
+            logger.warning(f"Could not test URL accessibility: {test_error}")
 
         logger.info("Inserting document record...")
         # Insert document
@@ -240,9 +306,58 @@ async def receive_file(
     
     finally:
         # Always clean up temporary file
-        if file_location and os.path.exists(file_location):
-            os.remove(file_location)
-            logger.info(f"Cleaned up temporary file: {file_location}")
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            logger.info(f"Cleaned up temporary file: {temp_file_path}")
+
+# Add a test endpoint to verify Cloudinary configuration
+@router.get("/test-cloudinary-config")
+async def test_cloudinary_config():
+    try:
+        import cloudinary
+        
+        # Test configuration
+        config = cloudinary.config()
+        logger.info(f"Cloudinary config: cloud_name={config.cloud_name}")
+        
+        if not config.cloud_name or not config.api_key or not config.api_secret:
+            return {
+                "status": "error",
+                "message": "Cloudinary configuration incomplete",
+                "config": {
+                    "cloud_name": bool(config.cloud_name),
+                    "api_key": bool(config.api_key),
+                    "api_secret": bool(config.api_secret)
+                }
+            }
+        
+        # Test upload with a simple text file
+        test_result = cloudinary.uploader.upload(
+            "data:text/plain;base64,SGVsbG8gV29ybGQ=",  # "Hello World" in base64
+            resource_type="raw",
+            public_id="test_upload",
+            folder="test"
+        )
+        
+        # Clean up test file
+        try:
+            cloudinary.uploader.destroy("test/test_upload", resource_type="raw")
+        except:
+            pass
+        
+        return {
+            "status": "success",
+            "message": "Cloudinary configuration is working",
+            "test_url": test_result.get("secure_url"),
+            "cloud_name": config.cloud_name
+        }
+        
+    except Exception as e:
+        logger.error(f"Cloudinary configuration test failed: {str(e)}")
+        return {
+            "status": "error", 
+            "message": f"Cloudinary test failed: {str(e)}"
+        }
 
 @router.get("/summary")
 async def summary(doc_id: str):
