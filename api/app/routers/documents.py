@@ -228,7 +228,7 @@ async def receive_file(
             use_filename=True,
             unique_filename=True,  # Ensure unique filename
             folder="documents", 
-                access_mode="public",  # Make it publicly accessible
+            access_mode="public",  # Make it publicly accessible
 
               # Organize in folder
             # Add file type transformation for better handling

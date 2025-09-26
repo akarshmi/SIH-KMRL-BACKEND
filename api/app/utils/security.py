@@ -1,5 +1,6 @@
 from passlib.context import CryptContext
 
+# Initialize password context with bcrypt scheme
 pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto",
@@ -7,11 +8,13 @@ pwd_context = CryptContext(
 )
 
 def hash_password(password: str) -> str:
-    # Truncate to 72 characters (bcrypt limitation) but keep as string
-    truncated_password = password[:72]
+    """Hash the password and ensure it's truncated to 72 characters (bcrypt limitation)."""
+    if not password:
+        raise ValueError("Password cannot be empty")
+    
+    truncated_password = password[:72]  # Truncate to bcrypt's max length
     return pwd_context.hash(truncated_password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # Truncate to 72 characters and keep as string
-    truncated_password = plain_password[:72]
-    return pwd_context.verify(truncated_password, hashed_password)
+    """Verify if the plain password matches the stored hash."""
+    return pwd_context.verify(plain_password, hashed_password)

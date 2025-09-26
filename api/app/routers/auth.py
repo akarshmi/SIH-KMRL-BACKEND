@@ -5,20 +5,23 @@ from api.app.schemas.models import LoginRequest, RegisterRequest
 from api.app.utils.security import hash_password, verify_password
 
 router = APIRouter()
-
 @router.post("/register")
 async def register(request: RegisterRequest):
+    # Check if the user already exists
     response = supabase.table("users").select("*").eq("email", request.email).execute()
     if response.data:
         raise HTTPException(status_code=400, detail="User already exists")
 
+    # Hash the user's password
     hashed_password = hash_password(request.password)
 
+    # Get the department ID
     dept_resp = supabase.table("departments").select("dept_id").eq("name", request.department).execute()
     if not dept_resp.data:
         raise HTTPException(status_code=400, detail="Department not found")
     dept_id = dept_resp.data[0]["dept_id"]
 
+    # Create new user record with hashed password
     response_1 = supabase.table("users").insert({
         "email": request.email,
         "password": hashed_password,
@@ -27,26 +30,21 @@ async def register(request: RegisterRequest):
         "department": dept_id,
         "phone": request.phone
     }).execute()
-    return {"success": True, "message": "User registered successfully","user_id" : response_1.data[0]["id"]}
 
-
+    # Return response with user ID
+    return {"success": True, "message": "User registered successfully", "user_id": response_1.data[0]["id"]}
 @router.post("/login")
 async def login(request: LoginRequest):
     try:
         # Fetch user by ID
-        response = (
-            supabase.table("users")
-            .select("*")
-            .eq("id", request.user_id)
-            .execute()
-        )
+        response = supabase.table("users").select("*").eq("id", request.user_id).execute()
 
         if not response.data:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         user = response.data[0]
 
-        # Successful login
+        # Verify the password (use the hashed password from the database)
         if verify_password(request.password, user["password"]):
             return {"success": True, "message": "Login successful", "user": user}
         else:
@@ -55,8 +53,7 @@ async def login(request: LoginRequest):
     except HTTPException:
         raise  # re-raise known errors
     except Exception as e:
-        # Log the error (replace with proper logging in prod)
-        print("Login error:", str(e))
+        print("Login error:", str(e))  # Log the error for debugging
         raise HTTPException(status_code=500, detail="Login failed. Please try again.")
 
 @router.post("/department")
