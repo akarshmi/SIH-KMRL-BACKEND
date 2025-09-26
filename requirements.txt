@@ -23,3 +23,15 @@ cloudinary==1.36.0
 
 # Environment variables
 python-dotenv==1.0.0
+
+# NumPy (must be compatible with torch and transformers)
+numpy<2.0.0
+
+# AI/ML dependencies
+torch==2.1.2+cpu
+transformers==4.36.2
+sentence-transformers==2.2.2
+
+# Additional ML dependencies
+tokenizers==0.15.0
+huggingface-hub==0.19.4

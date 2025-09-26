@@ -8,8 +8,19 @@ from api.app.schemas.models import URLRequest, SUMMARYRequest, ListDocsRequest, 
 # from nlpPipelne.stages.EmbedIndex import search
 import json
 from fastapi import Request
-import torch
-from sentence_transformers import SentenceTransformer
+
+# Optional ML imports
+try:
+    import torch
+    from sentence_transformers import SentenceTransformer
+    ML_AVAILABLE = True
+    MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    model = SentenceTransformer(MODEL_NAME, device="cuda" if torch.cuda.is_available() else "cpu")
+except ImportError:
+    ML_AVAILABLE = False
+    torch = None
+    SentenceTransformer = None
+    model = None
 
 router = APIRouter()
 
@@ -182,11 +193,14 @@ async def compliances(doc_id: str):
         return {"data": response.data}
     return {"error": "No compliances found"}
 
-MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-model = SentenceTransformer(MODEL_NAME, device="cuda" if torch.cuda.is_available() else "cpu")
-
 @router.get("/search", response_model=list[SearchResponse])
 async def search(query: str = Query(...), top_k: int = 5):
+    if not ML_AVAILABLE:
+        raise HTTPException(
+            status_code=503, 
+            detail="Search functionality not available. ML dependencies (torch, sentence-transformers) are not installed."
+        )
+    
     # Embed query
     with torch.inference_mode():
         q = model.encode([query], normalize_embeddings=True).tolist()[0]
