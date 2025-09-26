@@ -56,13 +56,13 @@ async def send_email(file: UploadFile = File(...), emailAdr: str = Form(...)):
     #     "document": doc_resp.data,
     #     "filename": file.filename,
     #     "processed": output,
-    #     "cloudinary_url": upload_result.get("secure_url")
+    #     "cloudinary_url": upload_result.get("public_url")
     # }
     return {
         "document": doc_resp.data,
         "filename": file.filename,
         "processed": "",
-        "cloudinary_url": upload_result.get("secure_url")
+        "cloudinary_url": upload_result.get("public_url")
     }
 
 @router.post("/whatsapp")
@@ -112,12 +112,12 @@ async def send_message(file: UploadFile = File(...), phone: str = Form(...)):
     #     "document": doc_resp.data,
     #     "filename": file.filename,
     #     "processed": output,
-    #     "cloudinary_url": upload_result.get("secure_url")
+    #     "cloudinary_url": upload_result.get("public_url")
     # }
 
     return {
         "document": doc_resp.data,
         "filename": file.filename,
         "processed": "",
-        "cloudinary_url": upload_result.get("secure_url")
+        "cloudinary_url": upload_result.get("public_url")
     }

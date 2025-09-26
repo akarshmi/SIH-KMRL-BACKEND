@@ -78,13 +78,13 @@ async def receive_url(request: URLRequest):
     #     "document": doc_resp.data,
     #     "filename": filename,
     #     "processed": output,
-    #     "cloudinary_url": upload_result.get("secure_url")
+    #     "cloudinary_url": upload_result.get("public_url")
     # }
     return {
         "document": doc_resp.data,
         "filename": filename,
         "processed": "",
-        "cloudinary_url": upload_result.get("secure_url")
+        "cloudinary_url": upload_result.get("public_url")
     }
 
 @router.post("/file")
@@ -141,14 +141,14 @@ async def receive_file(
     #     "document": doc_resp.data,
     #     "filename": file.filename,
     #     "processed": output,
-    #     "cloudinary_url": upload_result.get("secure_url")
+    #     "cloudinary_url": upload_result.get("public_url")
     # }
 
     return {
         "document": doc_resp.data,
         "filename": file.filename,
         "processed": "",
-        "cloudinary_url": upload_result.get("secure_url")
+        "cloudinary_url": upload_result.get("public_url")
     }
 
 @router.get("/summary")
