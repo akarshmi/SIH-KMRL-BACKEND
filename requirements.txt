@@ -27,8 +27,8 @@ python-dotenv==1.0.0
 # NumPy (must be compatible with torch and transformers)
 numpy<2.0.0
 
-# AI/ML dependencies
-torch==2.1.2+cpu
+# AI/ML (compatible versions)
+torch==2.1.2
 transformers==4.36.2
 sentence-transformers==2.2.2
 
